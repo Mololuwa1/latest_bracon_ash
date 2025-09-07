@@ -1,0 +1,36 @@
+# Core Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+gunicorn==21.2.0
+
+# Data Processing
+pandas==2.1.3
+numpy==1.25.2
+scipy==1.11.4
+
+# Solar Physics
+pvlib-python==0.10.2
+
+# Database
+sqlalchemy==2.0.23
+psycopg2-binary==2.9.9
+
+# API and Validation
+pydantic==2.5.0
+requests==2.31.0
+
+# Logging and Monitoring
+colorlog==6.8.0
+
+# Web Framework (for compatibility)
+flask==2.3.3
+werkzeug==2.3.7
+
+# Development and Testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+httpx==0.25.2
+
+# Production
+python-multipart==0.0.6
+
