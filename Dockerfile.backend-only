@@ -1,0 +1,334 @@
+# Backend-only Dockerfile for Heliotelligence
+# This version serves a simple frontend without complex build process
+
+FROM python:3.11-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for better caching
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY core/ ./core/
+COPY backend/ ./backend/
+
+# Create simple static frontend
+RUN mkdir -p static
+
+# Create a simple index.html for the frontend
+RUN cat > static/index.html << 'EOF'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Heliotelligence - Solar Energy Prediction</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        .map-container { height: 400px; }
+        .loading { display: none; }
+        .loading.show { display: block; }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div class="container mx-auto px-4 py-8">
+        <header class="text-center mb-8">
+            <h1 class="text-4xl font-bold text-blue-600 mb-2">🌞 Heliotelligence</h1>
+            <p class="text-gray-600">Physics-based Solar Energy Prediction Platform</p>
+        </header>
+
+        <div class="grid md:grid-cols-2 gap-8">
+            <!-- Configuration Form -->
+            <div class="bg-white rounded-lg shadow-lg p-6">
+                <h2 class="text-2xl font-semibold mb-4">System Configuration</h2>
+                
+                <form id="predictionForm" class="space-y-4">
+                    <!-- Location -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Location</label>
+                        <div class="grid grid-cols-2 gap-2">
+                            <input type="number" id="latitude" placeholder="Latitude" value="51.5074" 
+                                   class="border rounded px-3 py-2" step="0.0001">
+                            <input type="number" id="longitude" placeholder="Longitude" value="-0.1278" 
+                                   class="border rounded px-3 py-2" step="0.0001">
+                        </div>
+                        <input type="number" id="altitude" placeholder="Altitude (m)" value="11" 
+                               class="border rounded px-3 py-2 w-full mt-2">
+                    </div>
+
+                    <!-- Array Configuration -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Array Configuration</label>
+                        <div class="grid grid-cols-2 gap-2">
+                            <input type="number" id="tilt" placeholder="Tilt (°)" value="35" 
+                                   class="border rounded px-3 py-2">
+                            <input type="number" id="azimuth" placeholder="Azimuth (°)" value="180" 
+                                   class="border rounded px-3 py-2">
+                        </div>
+                        <div class="grid grid-cols-2 gap-2 mt-2">
+                            <input type="number" id="modules_per_string" placeholder="Modules/String" value="20" 
+                                   class="border rounded px-3 py-2">
+                            <input type="number" id="strings_per_inverter" placeholder="Strings/Inverter" value="10" 
+                                   class="border rounded px-3 py-2">
+                        </div>
+                    </div>
+
+                    <!-- Module Parameters -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Module Parameters</label>
+                        <div class="grid grid-cols-2 gap-2">
+                            <input type="number" id="module_power" placeholder="Power (W)" value="400" 
+                                   class="border rounded px-3 py-2">
+                            <input type="number" id="temp_coefficient" placeholder="Temp Coeff (%/°C)" value="-0.35" 
+                                   class="border rounded px-3 py-2" step="0.01">
+                        </div>
+                    </div>
+
+                    <!-- Inverter Parameters -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Inverter Parameters</label>
+                        <div class="grid grid-cols-2 gap-2">
+                            <input type="number" id="inverter_power" placeholder="Power (W)" value="50000" 
+                                   class="border rounded px-3 py-2">
+                            <input type="number" id="efficiency" placeholder="Efficiency (%)" value="96.5" 
+                                   class="border rounded px-3 py-2" step="0.1">
+                        </div>
+                    </div>
+
+                    <button type="submit" class="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 transition">
+                        Generate Energy Prediction
+                    </button>
+                </form>
+
+                <div id="loading" class="loading text-center py-4">
+                    <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
+                    <p class="mt-2 text-gray-600">Generating prediction...</p>
+                </div>
+            </div>
+
+            <!-- Results Display -->
+            <div class="bg-white rounded-lg shadow-lg p-6">
+                <h2 class="text-2xl font-semibold mb-4">Prediction Results</h2>
+                
+                <div id="results" class="hidden">
+                    <div class="grid grid-cols-2 gap-4 mb-6">
+                        <div class="text-center p-4 bg-blue-50 rounded">
+                            <div class="text-2xl font-bold text-blue-600" id="annual-energy">-</div>
+                            <div class="text-sm text-gray-600">Annual Energy (kWh)</div>
+                        </div>
+                        <div class="text-center p-4 bg-green-50 rounded">
+                            <div class="text-2xl font-bold text-green-600" id="performance-ratio">-</div>
+                            <div class="text-sm text-gray-600">Performance Ratio (%)</div>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-4">
+                        <h3 class="font-semibold mb-2">Monthly Energy Production</h3>
+                        <canvas id="monthlyChart" width="400" height="200"></canvas>
+                    </div>
+                    
+                    <div id="loss-breakdown" class="mt-4">
+                        <h3 class="font-semibold mb-2">System Losses</h3>
+                        <div class="space-y-1 text-sm" id="losses-list">
+                            <!-- Losses will be populated here -->
+                        </div>
+                    </div>
+                </div>
+
+                <div id="no-results" class="text-center py-8 text-gray-500">
+                    Configure your system and click "Generate Prediction" to see results
+                </div>
+            </div>
+        </div>
+
+        <!-- Map -->
+        <div class="mt-8 bg-white rounded-lg shadow-lg p-6">
+            <h2 class="text-2xl font-semibold mb-4">Location Selection</h2>
+            <div id="map" class="map-container rounded"></div>
+        </div>
+    </div>
+
+    <script>
+        // Initialize map
+        const map = L.map('map').setView([51.5074, -0.1278], 6);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+
+        let marker = L.marker([51.5074, -0.1278], {draggable: true}).addTo(map);
+        
+        marker.on('dragend', function(e) {
+            const pos = e.target.getLatLng();
+            document.getElementById('latitude').value = pos.lat.toFixed(4);
+            document.getElementById('longitude').value = pos.lng.toFixed(4);
+        });
+
+        // Form submission
+        document.getElementById('predictionForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const loading = document.getElementById('loading');
+            const results = document.getElementById('results');
+            const noResults = document.getElementById('no-results');
+            
+            loading.classList.add('show');
+            results.classList.add('hidden');
+            noResults.classList.add('hidden');
+            
+            try {
+                const formData = {
+                    location: {
+                        latitude: parseFloat(document.getElementById('latitude').value),
+                        longitude: parseFloat(document.getElementById('longitude').value),
+                        altitude: parseFloat(document.getElementById('altitude').value)
+                    },
+                    array: {
+                        tilt: parseFloat(document.getElementById('tilt').value),
+                        azimuth: parseFloat(document.getElementById('azimuth').value),
+                        stringing: {
+                            modules_per_string: parseInt(document.getElementById('modules_per_string').value),
+                            strings_per_inverter: parseInt(document.getElementById('strings_per_inverter').value)
+                        }
+                    },
+                    module_params: {
+                        power: parseFloat(document.getElementById('module_power').value),
+                        temp_coefficient: parseFloat(document.getElementById('temp_coefficient').value)
+                    },
+                    inverter_params: {
+                        power: parseFloat(document.getElementById('inverter_power').value),
+                        efficiency: parseFloat(document.getElementById('efficiency').value)
+                    },
+                    loss_params: {
+                        soiling: 2.0, shading: 1.0, snow: 0.5, mismatch: 2.0,
+                        wiring: 2.0, connections: 0.5, lid: 1.5, nameplate: 1.0,
+                        age: 0.0, availability: 3.0
+                    }
+                };
+
+                const response = await fetch('/api/v1/predict', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(formData)
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+                
+                // Display results
+                document.getElementById('annual-energy').textContent = 
+                    Math.round(data.annual_energy_kwh).toLocaleString();
+                document.getElementById('performance-ratio').textContent = 
+                    (data.performance_ratio * 100).toFixed(1);
+
+                // Show monthly chart
+                if (data.monthly_energy && data.monthly_energy.length === 12) {
+                    const ctx = document.getElementById('monthlyChart').getContext('2d');
+                    new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+                            datasets: [{
+                                label: 'Monthly Energy (kWh)',
+                                data: data.monthly_energy,
+                                backgroundColor: 'rgba(59, 130, 246, 0.5)',
+                                borderColor: 'rgb(59, 130, 246)',
+                                borderWidth: 1
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            scales: { y: { beginAtZero: true } }
+                        }
+                    });
+                }
+
+                // Show losses
+                if (data.loss_breakdown) {
+                    const lossesList = document.getElementById('losses-list');
+                    lossesList.innerHTML = '';
+                    Object.entries(data.loss_breakdown).forEach(([key, value]) => {
+                        const div = document.createElement('div');
+                        div.className = 'flex justify-between';
+                        div.innerHTML = `<span>${key.replace('_', ' ')}</span><span>${value.toFixed(1)} kWh</span>`;
+                        lossesList.appendChild(div);
+                    });
+                }
+
+                results.classList.remove('hidden');
+                noResults.classList.add('hidden');
+                
+            } catch (error) {
+                console.error('Prediction error:', error);
+                alert('Failed to generate prediction. Please check your configuration and try again.');
+                noResults.classList.remove('hidden');
+            } finally {
+                loading.classList.remove('show');
+            }
+        });
+
+        // UK city presets
+        const ukCities = [
+            {name: 'London', lat: 51.5074, lng: -0.1278},
+            {name: 'Manchester', lat: 53.4808, lng: -2.2426},
+            {name: 'Edinburgh', lat: 55.9533, lng: -3.1883},
+            {name: 'Cardiff', lat: 51.4816, lng: -3.1791},
+            {name: 'Belfast', lat: 54.5973, lng: -5.9301}
+        ];
+
+        // Add city buttons
+        const header = document.querySelector('header');
+        const cityButtons = document.createElement('div');
+        cityButtons.className = 'flex flex-wrap justify-center gap-2 mt-4';
+        ukCities.forEach(city => {
+            const btn = document.createElement('button');
+            btn.textContent = city.name;
+            btn.className = 'px-3 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 text-sm';
+            btn.onclick = () => {
+                document.getElementById('latitude').value = city.lat;
+                document.getElementById('longitude').value = city.lng;
+                marker.setLatLng([city.lat, city.lng]);
+                map.setView([city.lat, city.lng], 10);
+            };
+            cityButtons.appendChild(btn);
+        });
+        header.appendChild(cityButtons);
+    </script>
+</body>
+</html>
+EOF
+
+# Create directories for data and logs
+RUN mkdir -p data logs
+
+# Create non-root user for security
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+USER appuser
+
+# Expose port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Run the application
+CMD ["uvicorn", "backend.main_monitoring:app", "--host", "0.0.0.0", "--port", "8000"]
+
